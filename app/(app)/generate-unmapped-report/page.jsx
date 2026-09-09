@@ -69,16 +69,16 @@ export default function GenerateUnmappedReportPage() {
         throw new Error(message);
       }
 
+      // GENERATE DATE
+      const date = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
       // Get file
       const blob = await response.blob();
-
       // Download file
       const url = window.URL.createObjectURL(blob);
-
       const link = document.createElement("a");
       link.href = url;
-      link.download = "unmapped-report.csv";
-
+      link.download = `unmapped-report-${date}.csv`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -181,7 +181,7 @@ export default function GenerateUnmappedReportPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = "unmapped_report.csv";
+      a.download = `unmapped_report-${date}.csv`;
       a.click();
       URL.revokeObjectURL(url);
 
