@@ -1,5 +1,4 @@
 "use client";
-
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -23,7 +22,6 @@ import SortButton from "@/components/SortButton";
 import DownloadButton from "@/components/Download";
 import { DownloadAll } from "@/components/DownloadAll";
 import SWPushSetup from "@/components/SWPushSetup";
-
 const headers = [
   { label: "S.No.", icon: Hash },
   { label: "Date", icon: Calendar },
@@ -37,7 +35,6 @@ const headers = [
   { label: "Status", icon: CheckCircle },
   { label: "", icon: Trash2 },
 ];
-
 // dot color + text color per status — used for the badge dot AND the card accent bar
 const statusColors = {
   pending: { dot: "#ef4444", text: "#b91c1c", bg: "#fef2f2" },
@@ -48,12 +45,10 @@ const statusColors = {
   FAILED: { dot: "#ef4444", text: "#b91c1c", bg: "#fef2f2" },
 };
 const fallbackStatus = { dot: "#9ca3af", text: "#374151", bg: "#f3f4f6" };
-
 const SSE_URL =
   process.env.NEXT_PUBLIC_SSE_URL ||
   `${process.env.NEXT_PUBLIC_BACKEND_URL}/events`;
 const LIMIT = 100;
-
 function StatusBadge({ status }) {
   const c = statusColors[status] || fallbackStatus;
   return (
@@ -69,10 +64,8 @@ function StatusBadge({ status }) {
     </span>
   );
 }
-
 export default function Home() {
   const searchParams = useSearchParams();
-
   const page = Number(searchParams.get("page") ?? 1);
   const sort = searchParams.get("sort") || "desc";
   const startDate = searchParams.get("startDate");
@@ -82,21 +75,38 @@ export default function Home() {
   const store = searchParams.get("store");
   const installationType = searchParams.get("installationType");
   const status = searchParams.get("status");
-
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [meterNumbers, setMeterNumbers] = useState([]);
+  const [selectedMeters, setSelectedMeters] = useState(new Set());
+  const isAllSelected =
+    rows.length > 0 && rows.every((meter) => selectedMeters.has(meter._id));
+  const toggleMeterSelection = (id) => {
+    setSelectedMeters((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const toggleSelectAll = () => {
+    setSelectedMeters((prev) => {
+      if (rows.length > 0 && rows.every((meter) => prev.has(meter._id))) {
+        return new Set();
+      }
+      return new Set(rows.map((meter) => meter._id));
+    });
+  };
   const pageRef = useRef(page);
   useEffect(() => {
     pageRef.current = page;
   }, [page]);
-
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
-
     const query = new URLSearchParams();
     query.set("page", page);
     query.set("limit", LIMIT);
@@ -108,21 +118,17 @@ export default function Home() {
     if (store) query.set("store", store);
     if (installationType) query.set("installationType", installationType);
     if (status) query.set("status", status);
-
     try {
       const res = await fetch(`/api/meters?${query.toString()}`, {
         method: "GET",
         cache: "no-store",
       });
-
       const data = await res.json();
-
       if (!res.ok) {
         setError(data?.error || "Failed to fetch data");
         setLoading(false);
         return;
       }
-
       setRows(Array.isArray(data.data) ? data.data : []);
       setTotal(data.totalData ?? 0);
       setTotalPages(data.totalPages ?? 1);
@@ -143,41 +149,50 @@ export default function Home() {
     installationType,
     status,
   ]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+ 
+const handleDeleteMeters = async (meters) => {
+  if (!meters.length) return;
 
-  const handleDeleteMeters = async (meters) => {
-    try {
-      const confirmation = window.confirm("Are you sure you want to delete?");
-      if (!confirmation) {
-        return;
-      }
-      const res = await fetch(`/api/deletemeters`, {
-        method: "DELETE",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ meters }),
-      });
+  const confirmation = window.confirm(
+    `Are you sure you want to delete ${meters.length} meter(s)?`
+  );
 
-      const data = await res.json().catch(() => null);
+  if (!confirmation) return;
 
-      if (!res.ok) {
-        throw new Error(data?.error || "Failed to delete meters");
-      }
-      alert("Meters deleted successfully");
-      fetchData();
-    } catch (error) {
-      console.error("Failed to delete meters:", error);
-      alert("Failed to delete meters");
+  try {
+    const res = await fetch("/api/deletemeters", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ meters }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.message || "Failed to delete meters");
     }
-  };
+
+    alert(
+      `${data.data.deletedCount} meters deleted successfully`
+    );
+
+    setSelectedMeters(new Set());
+
+    await fetchData();
+
+  } catch (error) {
+    console.error(error);
+    alert(error.message || "Failed to delete meters");
+  }
+};
 
   useEffect(() => {
     const eventSource = new EventSource(SSE_URL, { withCredentials: true });
-
     eventSource.addEventListener("meter-added", (event) => {
       let payload;
       try {
@@ -186,39 +201,30 @@ export default function Home() {
         console.error("Failed to parse SSE payload:", err);
         return;
       }
-
       const newMeters = Array.isArray(payload?.meters) ? payload.meters : [];
       if (!newMeters.length) return;
-
       setRows((prev) => {
         if (pageRef.current !== 1) return prev;
-
         const existingIds = new Set(prev.map((m) => m._id));
         const toAdd = newMeters.filter((m) => !existingIds.has(m._id));
         if (!toAdd.length) return prev;
-
         const next = [...toAdd, ...prev];
         return next.length > LIMIT ? next.slice(0, LIMIT) : next;
       });
-
       setTotal((prev) => prev + (payload?.insertedCount ?? newMeters.length));
     });
-
     eventSource.onerror = (err) => {
       console.log("SSE Error:", err);
     };
-
     return () => {
       eventSource.close();
     };
   }, []);
-
   const createPageLink = (newPage) => {
     const params = new URLSearchParams(Array.from(searchParams.entries()));
     params.set("page", newPage);
     return `?${params.toString()}`;
   };
-
   const generatePages = (totalPagesArg, currentPage, maxButtons = 3) => {
     let start = Math.max(1, currentPage - 1);
     let end = Math.min(totalPagesArg, start + maxButtons - 1);
@@ -229,9 +235,7 @@ export default function Home() {
     for (let i = start; i <= end; i++) pages.push(i);
     return pages;
   };
-
   const pages = generatePages(totalPages, page);
-
   if (error === "Unauthorized") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-red-50/40">
@@ -239,7 +243,6 @@ export default function Home() {
       </div>
     );
   }
-
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-50 via-white to-red-50/40">
@@ -247,7 +250,6 @@ export default function Home() {
       </div>
     );
   }
-
   return (
     <>
       <div className="min-h-screen ">
@@ -270,16 +272,42 @@ export default function Home() {
                 {total} total
               </span>
             </div>
-
             <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap overflow-x-auto sm:overflow-visible -mx-2 px-2 sm:mx-0 sm:px-0 pb-2 sm:pb-0">
               <RefreshButton fn={fetchData} />
               <SortButton />
               <FilterButton />
               <DownloadButton />
+              {selectedMeters.size > 0 && (
+                <div className="flex items-center gap-3 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2">
+                  <span className="text-sm font-semibold text-blue-700">
+                    {selectedMeters.size} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteMeters([...selectedMeters])}
+                    className="inline-flex items-center gap-1.5 text-sm font-medium text-red-600 hover:text-red-700"
+                  >
+                    <Trash2 size={15} /> Delete selected
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedMeters(new Set())}
+                    className="text-sm text-gray-500 hover:text-gray-800"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
             </div>
           </div>
-
           {/* ================= MOBILE: CARD LIST (below sm) ================= */}
+          <div className="sm:hidden flex items-center justify-between py-2">
+            <label className="inline-flex items-center gap-2 text-sm text-gray-600">
+              <input type="checkbox" checked={isAllSelected} onChange={toggleSelectAll} disabled={!rows.length || loading} className="h-4 w-4 accent-blue-600" />
+              Select all on this page
+            </label>
+            {selectedMeters.size > 0 && <span className="text-xs font-medium text-blue-700">{selectedMeters.size} selected</span>}
+          </div>
           <div className="sm:hidden space-y-2.5">
             {loading ? (
               <div className="text-center py-14 text-gray-400 text-sm">
@@ -298,6 +326,13 @@ export default function Home() {
                       style={{ backgroundColor: c.dot }}
                     />
                     <div className="flex items-start justify-between gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedMeters.has(item._id)}
+                        onChange={() => toggleMeterSelection(item._id)}
+                        className="mt-1 h-4 w-4 shrink-0 accent-blue-600"
+                        aria-label={`Select meter ${item.meterNumber}`}
+                      />
                       <div>
                         <span className="text-[10px] text-gray-400 font-medium">
                           #{(page - 1) * LIMIT + index + 1}
@@ -311,7 +346,6 @@ export default function Home() {
                       </div>
                       <StatusBadge status={item.status} />
                     </div>
-
                     <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
                       <div className="flex items-center gap-1.5 text-gray-500">
                         <Calendar
@@ -351,7 +385,6 @@ export default function Home() {
                         {item.installerId}
                       </div>
                     </div>
-
                     <button
                       onClick={() => handleDeleteMeters([item._id])}
                       className="self-end mt-1 inline-flex items-center gap-1 text-[11px] font-medium text-red-500 hover:text-red-600 active:scale-95 transition"
@@ -368,7 +401,6 @@ export default function Home() {
               </div>
             )}
           </div>
-
           {/* ================= DESKTOP/TABLET: TABLE (sm and up) ================= */}
           <div className="hidden sm:block w-full overflow-x-auto">
             <div className="relative bg-white rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.06)] border border-gray-100 overflow-hidden min-w-[900px] lg:min-w-0">
@@ -377,7 +409,10 @@ export default function Home() {
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50/80 text-gray-500">
                     <tr>
-                      {headers.map(({ label, icon: Icon }) => (
+                      <th className="px-3 lg:px-4 py-2.5 lg:py-3">
+                      <input type="checkbox" checked={isAllSelected} onChange={toggleSelectAll} disabled={!rows.length || loading} className="h-4 w-4 accent-blue-600" aria-label="Select all meters on this page" />
+                    </th>
+                    {headers.map(({ label, icon: Icon }) => (
                         <th
                           key={label || "actions"}
                           className="px-3 lg:px-4 py-2.5 lg:py-3 text-left text-[10.5px] lg:text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap"
@@ -393,12 +428,11 @@ export default function Home() {
                       ))}
                     </tr>
                   </thead>
-
                   <tbody className="divide-y divide-gray-100">
                     {loading ? (
                       <tr>
                         <td
-                          colSpan="11"
+                          colSpan="12"
                           className="text-center py-14 text-gray-400"
                         >
                           Loading meters…
@@ -412,7 +446,10 @@ export default function Home() {
                             key={item._id}
                             className="group hover:bg-blue-50/30 transition-colors border-l-2 border-l-transparent hover:border-l-blue-400"
                           >
-                            <td className="px-3 lg:px-4 py-2.5 lg:py-3 text-gray-400 whitespace-nowrap text-xs">
+                            <td className="px-3 lg:px-4 py-2.5 lg:py-3">
+                            <input type="checkbox" checked={selectedMeters.has(item._id)} onChange={() => toggleMeterSelection(item._id)} className="h-4 w-4 accent-blue-600" aria-label={`Select meter ${item.meterNumber}`} />
+                          </td>
+                          <td className="px-3 lg:px-4 py-2.5 lg:py-3 text-gray-400 whitespace-nowrap text-xs">
                               {(page - 1) * LIMIT + index + 1}
                             </td>
                             <td className="px-3 lg:px-4 py-2.5 lg:py-3 whitespace-nowrap text-gray-600">
@@ -466,7 +503,7 @@ export default function Home() {
                     ) : (
                       <tr>
                         <td
-                          colSpan="11"
+                          colSpan="12"
                           className="text-center py-14 text-gray-400"
                         >
                           No pending meters found
@@ -478,7 +515,6 @@ export default function Home() {
               </div>
             </div>
           </div>
-
           {/* FOOTER */}
           <div className="flex flex-col gap-3 sm:gap-4 justify-between items-center mt-5">
             <div className="flex items-center gap-2 flex-wrap justify-center text-center">
@@ -489,14 +525,12 @@ export default function Home() {
               </p>
               <DownloadAll />
             </div>
-
             <div className="flex items-center gap-0.5 bg-white border border-gray-100 rounded-full shadow-[0_1px_3px_rgba(0,0,0,0.06)] p-1 overflow-x-auto max-w-full">
               <Link href={createPageLink(Math.max(1, page - 1))} prefetch>
                 <button className="p-1.5 sm:p-2 rounded-full text-gray-500 hover:bg-gray-100 disabled:opacity-40 cursor-pointer">
                   <ChevronLeft size={16} />
                 </button>
               </Link>
-
               {pages.map((num) => (
                 <Link key={num} href={createPageLink(num)} prefetch>
                   <button
@@ -510,7 +544,6 @@ export default function Home() {
                   </button>
                 </Link>
               ))}
-
               <Link
                 href={createPageLink(Math.min(totalPages, page + 1))}
                 prefetch
@@ -523,7 +556,7 @@ export default function Home() {
           </div>
         </div>
       </div>
-      <SWPushSetup/>
+      <SWPushSetup />
     </>
   );
 }
